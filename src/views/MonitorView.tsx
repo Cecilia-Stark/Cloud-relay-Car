@@ -18,7 +18,7 @@ export const MonitorView: React.FC<MonitorViewProps> = ({
   roleLabel = 'Operator'
 }) => {
   const isCritical = telemetry.status === VehicleStatus.CRITICAL;
-  const streamHost = import.meta.env.VITE_STREAM_HOST || window.location.hostname || '119.45.14.204';
+  const streamHost = import.meta.env.VITE_STREAM_HOST || window.location.hostname || '8.149.246.34';
   const carCameraUrl = import.meta.env.VITE_CAR_CAMERA_URL || `/live/car.flv`;
   const roadsideCameraUrl = import.meta.env.VITE_ROADSIDE_CAMERA_URL || `/live/car_front.flv`;
 

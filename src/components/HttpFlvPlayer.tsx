@@ -25,7 +25,7 @@ const MAX_HIGH_DELAY_SAMPLES = 2;
 function buildSrsRtcUrls(src: string) {
   const sourceUrl = new URL(src, window.location.href);
   const streamPath = sourceUrl.pathname.replace(/^\/+/, '').replace(/\.flv$/i, '');
-  const streamHost = sourceUrl.hostname || window.location.hostname || '119.45.14.204';
+  const streamHost = sourceUrl.hostname || window.location.hostname || '8.149.246.34';
   const apiUrl =
     import.meta.env.VITE_SRS_WEBRTC_API ||
     `${sourceUrl.protocol || window.location.protocol}//${streamHost}:1985/rtc/v1/play/`;

@@ -44,14 +44,14 @@ export const ControlView: React.FC<ControlViewProps> = ({ telemetry }) => {
   const [cameraMode, setCameraMode] = useState<'main' | 'wide'>('main');
   const [theme, setTheme] = useState<ControlTheme>(getInitialTheme);
 
-  const streamHost = import.meta.env.VITE_STREAM_HOST || window.location.hostname || '119.45.14.204';
+  const streamHost = import.meta.env.VITE_STREAM_HOST || window.location.hostname || '8.149.246.34';
   const carCameraUrl = import.meta.env.VITE_CAR_CAMERA_URL || `/live/car.flv`;
   const wideCameraUrl = import.meta.env.VITE_WIDE_CAMERA_URL || carCameraUrl;
   const roadsideCameraUrl = import.meta.env.VITE_ROADSIDE_CAMERA_URL || `/live/car_front.flv`;
   const steeringProgress = Math.min(100, Math.abs(g29Data.steering) / 450 * 100);
 
   const relayControlUrl = () => {
-    const serverHost = window.location.hostname || streamHost || '119.45.14.204';
+    const serverHost = window.location.hostname || streamHost || '8.149.246.34';
     const protocol = window.location.protocol === 'https:' ? 'https:' : 'http:';
     return `${protocol}//${serverHost}:8083/relay-control`;
   };

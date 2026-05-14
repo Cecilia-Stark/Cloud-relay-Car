@@ -31,7 +31,7 @@ CAR_IP = '192.168.0.5'
 CAR_PORT = 6999
 
 # 服务器 HTTP 接口 (用于前端显示)
-SERVER_HTTP = 'http://119.45.14.204:8083/g29'
+SERVER_HTTP = os.environ.get('SERVER_HTTP', 'http://8.149.246.34:8083/g29')
 load_env_file()
 G29_RELAY_TOKEN = os.environ.get('G29_RELAY_TOKEN', '').strip()
 if not G29_RELAY_TOKEN:

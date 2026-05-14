@@ -92,7 +92,7 @@ class VehicleConnectionService {
   private async startWebRTCStream() {
       console.log("正在尝试建立 WebRTC 视频连接...");
 
-      const SRS_SERVER_IP = localStorage.getItem('srs_server_ip') || '127.0.0.1';
+      const SRS_SERVER_IP = localStorage.getItem('srs_server_ip') || window.location.hostname || '8.149.246.34';
       const USE_WEBRTC = localStorage.getItem('use_webrtc') === 'true';
       
       if (!USE_WEBRTC) {
