@@ -34,8 +34,25 @@ const proxy = createProxyMiddleware({
 });
 
 // 创建 HTTP 服务器
+const VIDEO_PROXY_KEY = process.env.VIDEO_PROXY_KEY || '';
+
 const server = http.createServer((req, res) => {
-  console.log(`[${new Date().toLocaleTimeString()}] 请求：${req.url}`);
+  try {
+    const fullUrl = new URL(req.url, `http://${req.headers.host}`);
+    const key = fullUrl.searchParams.get('key');
+    const authHeader = (req.headers['authorization'] || '').toString();
+    console.log(`[${new Date().toLocaleTimeString()}] 请求：${req.url}  key=${key || '<none>'} auth=${authHeader ? '<present>' : '<none>'}`);
+
+    if (VIDEO_PROXY_KEY && !(key === VIDEO_PROXY_KEY || authHeader === `Bearer ${VIDEO_PROXY_KEY}`)) {
+      console.warn('拒绝未经授权的视频代理请求');
+      res.writeHead(401, { 'Content-Type': 'text/plain' });
+      res.end('Unauthorized');
+      return;
+    }
+  } catch {
+    console.warn('请求 URL 解析失败，继续代理（兼容旧客户端）');
+  }
+
   proxy(req, res);
 });
 

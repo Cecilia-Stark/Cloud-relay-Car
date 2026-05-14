@@ -35,6 +35,15 @@ export interface VehicleTelemetry {
 // Application View States
 export type ViewMode = 'LOGIN' | 'MONITOR' | 'CONTROL' | 'HISTORY';
 
+export type UserRole = 'operator' | 'dispatcher' | 'viewer';
+
+export interface AuthenticatedUser {
+  id: string;
+  username: string;
+  role: UserRole;
+  createdAt: string;
+}
+
 // Log entry for the history/playback tab
 export interface DriveSessionLog {
   id: string;
@@ -43,4 +52,21 @@ export interface DriveSessionLog {
   operator: string;
   events: number;
   status: 'Completed' | 'Aborted';
+  // Optional recorded telemetry samples captured during a control session
+  telemetrySamples?: VehicleTelemetry[];
+}
+
+export interface DriveSessionRecord {
+  id: string;
+  operator: string;
+  role: UserRole;
+  startTime: string;
+  endTime: string | null;
+  durationSeconds: number | null;
+  events: number;
+  status: 'recording' | 'completed' | 'aborted' | 'recording_error';
+  videoPath: string | null;
+  videoFilename: string | null;
+  videoSize: number;
+  errorMessage?: string | null;
 }

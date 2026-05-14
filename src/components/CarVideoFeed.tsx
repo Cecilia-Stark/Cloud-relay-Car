@@ -1,4 +1,6 @@
-import React, { useState } from 'react';
+import React, { type ReactNode, useEffect, useState } from 'react';
+import { getVideoUrl } from '../services/carControl';
+import { createVideoProxyAccessToken } from '../services/auth';
 
 interface CarVideoFeedProps {
   label?: string;
@@ -6,6 +8,8 @@ interface CarVideoFeedProps {
   isActive?: boolean;
   className?: string;
   autoConnect?: boolean;
+  overlay?: ReactNode;
+  onError?: () => void;
 }
 
 export const CarVideoFeed: React.FC<CarVideoFeedProps> = ({
@@ -13,13 +17,43 @@ export const CarVideoFeed: React.FC<CarVideoFeedProps> = ({
   src,
   isActive = true,
   className = '',
+  overlay,
+  onError,
 }) => {
   const [hasError, setHasError] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [retryCount, setRetryCount] = useState(0);
+  const [streamUrl, setStreamUrl] = useState('');
 
-  const defaultSrc = 'http://localhost:8001/';
-  const streamUrl = src || defaultSrc;
+  const defaultSrc = getVideoUrl();
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function authorizeStream() {
+      const baseUrl = src || defaultSrc;
+      setIsLoading(true);
+      try {
+        const token = await createVideoProxyAccessToken();
+        const url = new URL(baseUrl);
+        url.searchParams.set('videoProxyToken', token);
+        if (!cancelled) setStreamUrl(url.toString());
+      } catch (err) {
+        console.error('Video proxy authorization failed:', err);
+        if (!cancelled) {
+          setStreamUrl('');
+          setHasError(true);
+          setIsLoading(false);
+          onError?.();
+        }
+      }
+    }
+
+    authorizeStream();
+    return () => {
+      cancelled = true;
+    };
+  }, [defaultSrc, onError, retryCount, src]);
 
   const handleImageLoad = () => {
     console.log('✅ 视频流加载成功');
@@ -31,6 +65,7 @@ export const CarVideoFeed: React.FC<CarVideoFeedProps> = ({
     console.error('❌ 视频流加载失败:', streamUrl);
     setIsLoading(false);
     setHasError(true);
+    onError?.();
     const timer = setTimeout(() => {
       setRetryCount(c => c + 1);
     }, 3000);
@@ -57,7 +92,7 @@ export const CarVideoFeed: React.FC<CarVideoFeedProps> = ({
       </div>
 
       <div className="flex-1 w-full h-full relative">
-        {isActive ? (
+        {isActive && streamUrl ? (
           <>
             <img
               key={retryCount}
@@ -69,11 +104,16 @@ export const CarVideoFeed: React.FC<CarVideoFeedProps> = ({
                 hasError ? 'opacity-50' : 'opacity-100'
               }`}
               style={{ transform: 'scale(1.01)' }}
-              crossOrigin="anonymous"
             />
+
+            {overlay && (
+              <div className="absolute inset-0 z-10 pointer-events-none">
+                {overlay}
+              </div>
+            )}
             
             {hasError && (
-              <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/80 z-10">
+              <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/80 z-20">
                 <div className="text-red-500 text-sm font-mono mb-2">
                   ⚠️ 视频流连接失败
                 </div>

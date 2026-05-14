@@ -1,270 +1,298 @@
-import React, { useState, useEffect } from 'react';
-import { Car, User, Lock, Mail, ArrowRight, Loader2 } from 'lucide-react';
+import React, { useEffect, useMemo, useState } from 'react';
+import {
+  ArrowRight,
+  Car,
+  KeyRound,
+  Loader2,
+  Lock,
+  Moon,
+  ShieldCheck,
+  Sun,
+  User,
+  Wifi
+} from 'lucide-react';
+import { AuthSession, login, registerUser, setAuthToken } from '../services/auth';
 
 interface LoginViewProps {
-  onLoginSuccess: (username: string) => void;
+  onLoginSuccess: (session: AuthSession) => void;
 }
 
-// 模拟数据库 - 使用 localStorage 持久化存储
-const DB_KEY = 'cloudrive_user_db';
+type LoginTheme = 'dark' | 'light';
 
-// 从 localStorage 读取用户数据库
-const getUserDB = (): Record<string, { password: string; email: string }> => {
-  const saved = localStorage.getItem(DB_KEY);
-  if (saved) {
-    try {
-      return JSON.parse(saved);
-    } catch {
-      return { admin: { password: '123456', email: 'admin@example.com' } };
-    }
+const capabilityCards = [
+  { label: '视频链路', icon: Wifi },
+  { label: '车辆状态', icon: Car },
+  { label: '权限管控', icon: ShieldCheck }
+];
+
+function getInviteCodeFromUrl() {
+  try {
+    const params = new URLSearchParams(window.location.search);
+    return params.get('inviteCode') || params.get('invite') || params.get('code') || params.get('key') || '';
+  } catch {
+    return '';
   }
-  // 默认管理员账户
-  return { admin: { password: '123456', email: 'admin@example.com' } };
-};
+}
 
-// 保存用户数据库到 localStorage
-const saveUserDB = (db: Record<string, { password: string; email: string }>) => {
-  localStorage.setItem(DB_KEY, JSON.stringify(db));
-};
+function getInitialTheme(): LoginTheme {
+  try {
+    const saved = localStorage.getItem('clouddrive_login_theme');
+    if (saved === 'light' || saved === 'dark') return saved;
+  } catch {
+    // Ignore storage access errors.
+  }
+  return 'dark';
+}
 
 export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess }) => {
-  const [isRegistering, setIsRegistering] = useState(false);
-  
-  // Form State
+  const [mode, setMode] = useState<'login' | 'register'>('login');
+  const [theme, setTheme] = useState<LoginTheme>(getInitialTheme);
   const [username, setUsername] = useState('');
-  const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
+  const [inviteCode, setInviteCode] = useState(getInviteCodeFromUrl);
   const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
 
-  // 检查是否已登录
+  const isDark = theme === 'dark';
+  const ThemeIcon = isDark ? Sun : Moon;
+  const modeCopy = useMemo(
+    () => ({
+      eyebrow: mode === 'login' ? '授权访问' : '操作员注册',
+      title: mode === 'login' ? '操作员登录' : '创建操作员账号',
+      subtitle: mode === 'login'
+        ? '登录后可查看实时视频、方向盘输入、车辆遥测与接管状态。'
+        : '使用操作员邀请码注册账号，进入远程驾驶云控平台。',
+      submit: mode === 'login' ? '登录系统' : '注册并进入'
+    }),
+    [mode]
+  );
+
   useEffect(() => {
-    const savedUser = localStorage.getItem('cloudrive_current_user');
-    if (savedUser) {
-      try {
-        const user = JSON.parse(savedUser);
-        if (user && user.username) {
-          onLoginSuccess(user.username);
-        }
-      } catch {}
+    try {
+      localStorage.setItem('clouddrive_login_theme', theme);
+    } catch {
+      // Ignore storage access errors.
     }
-  }, [onLoginSuccess]);
+  }, [theme]);
+
+  const resetMessages = () => {
+    setError(null);
+    setSuccess(null);
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setError(null);
-    setIsLoading(true);
+    resetMessages();
 
-    // 基础非空验证
-    if (!username || !password) {
-        setError("请输入用户名和密码");
-        setIsLoading(false);
-        return;
+    const safeUsername = username.trim();
+    if (!safeUsername || !password) {
+      setError('请输入用户名和密码。');
+      return;
     }
 
-    if (isRegistering) {
-        // --- 注册流程 ---
-        if (!email) {
-            setError("请输入邮箱");
-            setIsLoading(false);
-            return;
-        }
-        if (password !== confirmPassword) {
-            setError("两次输入的密码不一致");
-            setIsLoading(false);
-            return;
-        }
-        
-        // 模拟向后端发送注册请求
-        setTimeout(() => {
-            const userDB = getUserDB();
-            
-            // 检查用户是否已存在
-            if (userDB[username]) {
-                setError("用户名已存在");
-                setIsLoading(false);
-                return;
-            }
-            
-            // 保存新用户
-            userDB[username] = { password, email };
-            saveUserDB(userDB);
+    if (mode === 'register') {
+      if (password.length < 6) {
+        setError('密码至少需要 6 位。');
+        return;
+      }
+      if (password !== confirmPassword) {
+        setError('两次输入的密码不一致。');
+        return;
+      }
+      if (!inviteCode.trim()) {
+        setError('请输入操作员邀请码。');
+        return;
+      }
+    }
 
-            console.log("注册成功，用户数据已保存:", { username, email });
-            setIsLoading(false);
-            setIsRegistering(false); // 切换回登录页
-            alert("注册成功！请使用刚才设置的密码登录。");
-            
-            setPassword('');
-            setConfirmPassword('');
-        }, 1000);
+    setIsLoading(true);
+    try {
+      const session = mode === 'login'
+        ? await login(safeUsername, password)
+        : await registerUser({ username: safeUsername, password, role: 'operator', inviteCode: inviteCode.trim() });
 
-    } else {
-        // --- 登录流程 ---
-        setTimeout(() => {
-            const userDB = getUserDB();
-            const userData = userDB[username];
+      if (mode === 'register' && session.user.role === 'operator') {
+        setAuthToken(inviteCode.trim());
+      }
 
-            // 校验密码
-            if (userData && userData.password === password) { 
-                console.log("登录成功");
-                // 保存当前用户到 localStorage
-                localStorage.setItem('cloudrive_current_user', JSON.stringify({ username, email: userData.email }));
-                onLoginSuccess(username);
-            } else {
-                setError("用户名或密码错误");
-                setIsLoading(false);
-            }
-        }, 800);
+      setSuccess(mode === 'login' ? '登录成功。' : '注册成功。');
+      onLoginSuccess(session);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '请求失败，请稍后重试。');
+    } finally {
+      setIsLoading(false);
     }
   };
 
+  const switchMode = (nextMode: 'login' | 'register') => {
+    setMode(nextMode);
+    resetMessages();
+  };
+
   return (
-    <div className="min-h-screen bg-slate-950 flex items-center justify-center relative overflow-hidden font-sans">
-      {/* 动态背景层 */}
-      <div className="absolute inset-0 z-0 pointer-events-none">
-         {/* 修复：调整渐变透明度，让背景图能透出来。via-slate-900/90 稍微透明一点 */}
-         <div className="absolute inset-0 bg-gradient-to-br from-slate-900/95 via-slate-900/90 to-blue-900/40 z-10"></div>
-         {/* 装饰性背景图 */}
-         <div className="absolute top-0 left-0 w-full h-full bg-[url('https://images.unsplash.com/photo-1492144534655-ae79c964c9d7?auto=format&fit=crop&q=80')] bg-cover bg-center opacity-20"></div>
-      </div>
+    <div className="login-page min-h-screen overflow-hidden font-sans" data-theme={theme}>
+      <div className="login-backdrop" />
+      <div className="login-noise" />
 
-      {/* 主卡片容器 */}
-      <div className="z-20 w-full max-w-4xl h-[600px] bg-slate-900/80 backdrop-blur-xl rounded-2xl shadow-2xl overflow-hidden flex border border-slate-700/50 transition-all duration-300 hover:shadow-blue-900/20">
-          
-          {/* 左侧：品牌展示区 */}
-          <div className="hidden md:flex w-1/2 bg-gradient-to-br from-blue-900/40 to-slate-900/40 flex-col items-center justify-center p-12 text-center relative overflow-hidden">
-              <div className="relative z-10">
-                  <div className="w-24 h-24 bg-gradient-to-tr from-blue-600 to-cyan-500 rounded-2xl flex items-center justify-center mx-auto mb-8 shadow-lg shadow-blue-500/20 transform -rotate-6 transition-transform hover:rotate-0 duration-500 group cursor-pointer">
-                    <Car size={48} className="text-white group-hover:scale-110 transition-transform duration-300" />
-                  </div>
-                  <h2 className="text-3xl font-bold text-white mb-4 tracking-wide">CloudDrive <span className="text-blue-400">Pilot</span></h2>
-                  <p className="text-slate-300 leading-relaxed font-light">
-                    下一代 5G 远程驾驶云控平台<br/>
-                    <span className="text-xs text-slate-400 mt-2 block font-medium tracking-wider opacity-70">Next-Gen 5G Remote Driving Platform</span>
-                  </p>
-              </div>
-              
-              {/* 装饰光晕 */}
-              <div className="absolute -bottom-24 -left-24 w-64 h-64 bg-blue-600/20 rounded-full blur-3xl animate-pulse"></div>
-              <div className="absolute -top-24 -right-24 w-64 h-64 bg-cyan-600/20 rounded-full blur-3xl animate-pulse delay-700"></div>
+      <header className="login-topbar">
+        <button
+          type="button"
+          className="theme-toggle"
+          onClick={() => setTheme(isDark ? 'light' : 'dark')}
+          aria-label={isDark ? '切换到白天模式' : '切换到黑夜模式'}
+          title={isDark ? '白天模式' : '黑夜模式'}
+        >
+          <ThemeIcon size={18} />
+          <span>{isDark ? '白天' : '黑夜'}</span>
+        </button>
+      </header>
+
+      <main className="login-stage">
+        <section className="login-hero" aria-label="远程驾驶云控平台概览">
+          <div className="hero-copy-block">
+            <h1>车路云融合<br />远程驾驶</h1>
+            <div className="hero-rule" />
+            <p className="hero-copy">实时视频、车辆遥测与紧急接管一体化管理。</p>
           </div>
 
-          {/* 右侧：表单区域 */}
-          <div className="w-full md:w-1/2 p-8 md:p-12 flex flex-col justify-center bg-slate-800/40 relative">
-              <div className="mb-8">
-                  <h3 className="text-2xl font-bold text-white mb-2 tracking-tight">
-                      {isRegistering ? '创建账户' : '欢迎回来'}
-                  </h3>
-                  <p className="text-slate-400 text-sm">
-                      {isRegistering ? '加入智能驾驶网络' : '请输入凭证进入驾驶舱'}
-                  </p>
-              </div>
+          <div className="route-map" aria-hidden="true">
+            <div className="grid-plane" />
+            <svg className="route-svg" viewBox="0 0 720 360" preserveAspectRatio="none">
+              <path d="M92 292 L238 238 L350 274 L460 156 L616 70" />
+              <circle cx="92" cy="292" r="13" />
+              <circle cx="238" cy="238" r="13" />
+              <circle cx="350" cy="274" r="13" />
+              <circle cx="460" cy="156" r="13" />
+              <circle className="active-node" cx="616" cy="70" r="13" />
+            </svg>
+            <span className="vehicle-dot"><Car size={22} /></span>
+          </div>
+        </section>
 
-              {/* 错误提示框 */}
-              {error && (
-                  <div className="mb-6 p-3 bg-red-500/10 border-l-4 border-red-500 text-red-200 text-xs rounded-r flex items-center gap-2 animate-[slideUp_0.3s_ease-out]">
-                      <span>⚠️</span> {error}
-                  </div>
+        <section className="access-panel" aria-label="操作员身份认证">
+          <div className="panel-header">
+            <div>
+              <p className="section-kicker">{modeCopy.eyebrow}</p>
+              <h2>{modeCopy.title}</h2>
+              <p>{modeCopy.subtitle}</p>
+            </div>
+            <ShieldCheck size={42} />
+          </div>
+
+          <div className="mode-switch" role="tablist" aria-label="认证方式">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={mode === 'login'}
+              onClick={() => switchMode('login')}
+            >
+              登录
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={mode === 'register'}
+              onClick={() => switchMode('register')}
+            >
+              注册
+            </button>
+          </div>
+
+          {error && <div className="auth-message error">{error}</div>}
+          {success && <div className="auth-message success">{success}</div>}
+
+          <form onSubmit={handleSubmit} className="auth-form">
+            <label className="field-row">
+              <User size={21} />
+              <input
+                type="text"
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                placeholder="用户名"
+                autoComplete="username"
+              />
+            </label>
+
+            <label className="field-row">
+              <Lock size={21} />
+              <input
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="密码"
+                autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
+              />
+            </label>
+
+            {mode === 'register' && (
+              <>
+                <label className="field-row">
+                  <Lock size={21} />
+                  <input
+                    type="password"
+                    value={confirmPassword}
+                    onChange={(e) => setConfirmPassword(e.target.value)}
+                    placeholder="确认密码"
+                    autoComplete="new-password"
+                  />
+                </label>
+
+                <label className="field-row">
+                  <KeyRound size={21} />
+                  <input
+                    type="password"
+                    value={inviteCode}
+                    onChange={(e) => setInviteCode(e.target.value)}
+                    placeholder="操作员邀请码"
+                    autoComplete="one-time-code"
+                  />
+                </label>
+              </>
+            )}
+
+            {mode === 'login' && (
+              <div className="form-tools">
+                <label>
+                  <input type="checkbox" />
+                  <span>记住我</span>
+                </label>
+                <button type="button">忘记密码？</button>
+              </div>
+            )}
+
+            <button type="submit" disabled={isLoading} className="submit-button">
+              {isLoading ? (
+                <Loader2 className="animate-spin" size={22} />
+              ) : (
+                <>
+                  <span>{modeCopy.submit}</span>
+                  <ArrowRight size={22} />
+                </>
               )}
+            </button>
+          </form>
 
-              <form onSubmit={handleSubmit} className="space-y-5">
-                  <div className="group">
-                      <div className="relative">
-                          <User size={18} className="absolute left-3 top-3.5 text-slate-500 group-focus-within:text-blue-400 transition-colors" />
-                          <input 
-                              type="text" 
-                              value={username}
-                              onChange={(e) => setUsername(e.target.value)}
-                              className="w-full bg-slate-900/60 border border-slate-700 rounded-lg py-3 pl-10 pr-4 text-white placeholder-slate-500 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none transition-all"
-                              placeholder="请输入用户名" 
-                          />
-                      </div>
-                  </div>
+          {mode === 'login' && (
+            <p className="register-link">
+              还没有账号？
+              <button type="button" onClick={() => switchMode('register')}>立即注册</button>
+            </p>
+          )}
 
-                  {isRegistering && (
-                    <div className="group animate-[slideUp_0.4s_ease-out]">
-                        <div className="relative">
-                            <Mail size={18} className="absolute left-3 top-3.5 text-slate-500 group-focus-within:text-blue-400 transition-colors" />
-                            <input 
-                                type="email" 
-                                value={email}
-                                onChange={(e) => setEmail(e.target.value)}
-                                className="w-full bg-slate-900/60 border border-slate-700 rounded-lg py-3 pl-10 pr-4 text-white placeholder-slate-500 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none transition-all"
-                                placeholder="请输入邮箱"
-                            />
-                        </div>
-                    </div>
-                  )}
-
-                  <div className="group">
-                      <div className="relative">
-                          <Lock size={18} className="absolute left-3 top-3.5 text-slate-500 group-focus-within:text-blue-400 transition-colors" />
-                          <input 
-                              type="password" 
-                              value={password}
-                              onChange={(e) => setPassword(e.target.value)}
-                              className="w-full bg-slate-900/60 border border-slate-700 rounded-lg py-3 pl-10 pr-4 text-white placeholder-slate-500 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none transition-all"
-                              placeholder="请输入密码"
-                          />
-                      </div>
-                  </div>
-
-                  {isRegistering && (
-                    <div className="group animate-[slideUp_0.4s_ease-out]">
-                        <div className="relative">
-                            <Lock size={18} className="absolute left-3 top-3.5 text-slate-500 group-focus-within:text-blue-400 transition-colors" />
-                            <input 
-                                type="password" 
-                                value={confirmPassword}
-                                onChange={(e) => setConfirmPassword(e.target.value)}
-                                className="w-full bg-slate-900/60 border border-slate-700 rounded-lg py-3 pl-10 pr-4 text-white placeholder-slate-500 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none transition-all"
-                                placeholder="请再次输入密码"
-                            />
-                        </div>
-                    </div>
-                  )}
-
-                  <button 
-                    type="submit" 
-                    disabled={isLoading}
-                    className="w-full bg-gradient-to-r from-blue-600 to-blue-500 hover:from-blue-500 hover:to-blue-400 text-white font-bold py-3 rounded-lg transition-all transform active:scale-[0.98] flex items-center justify-center gap-2 mt-4 shadow-lg shadow-blue-500/25 disabled:opacity-50 disabled:cursor-not-allowed hover:shadow-blue-500/40"
-                  >
-                      {isLoading ? (
-                          <Loader2 className="animate-spin" size={20} />
-                      ) : (
-                          <>
-                            {isRegistering ? '立即注册' : '登录系统'}
-                            <ArrowRight size={18} className="group-hover:translate-x-1 transition-transform" />
-                          </>
-                      )}
-                  </button>
-              </form>
-
-              <div className="mt-8 text-center">
-                  <p className="text-slate-400 text-sm">
-                      {isRegistering ? "已有账户？" : "还没有账户？"}
-                      <button 
-                        onClick={() => {
-                            setIsRegistering(!isRegistering);
-                            setError(null);
-                            setPassword('');
-                            setConfirmPassword('');
-                        }}
-                        className="ml-2 text-blue-400 hover:text-blue-300 font-semibold underline underline-offset-4 decoration-blue-400/30 hover:decoration-blue-400 transition-all"
-                      >
-                          {isRegistering ? '去登录' : '去注册'}
-                      </button>
-                  </p>
-              </div>
-          </div>
-      </div>
-      
-      {/* 底部版权信息 */}
-      <div className="absolute bottom-4 text-center text-slate-600 text-xs w-full">
-         © 2024 CloudDrive Pilot. All Rights Reserved.
-      </div>
+          {mode === 'login' && (
+            <div className="capability-grid">
+              {capabilityCards.map(({ icon: Icon, label }) => (
+                <div className="capability-card" key={label}>
+                  <Icon size={30} />
+                  <span>{label}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+      </main>
     </div>
   );
 };

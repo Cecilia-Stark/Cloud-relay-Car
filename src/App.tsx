@@ -1,220 +1,431 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Car, Eye, Keyboard, LogOut, Moon, ShieldCheck, Sun } from 'lucide-react';
 import { vehicleService } from './services/vehicleConnection';
-import { VehicleTelemetry, ViewMode, VehicleStatus, DriveSessionLog } from './types';
-import { MonitorView } from './views/MonitorView';
+import { AuthSession, clearStoredSession, getStoredSession, validateStoredSession } from './services/auth';
+import { startDriveSession, stopDriveSession } from './services/sessionArchive';
+import { AuthenticatedUser, DriveSessionLog, VehicleStatus, VehicleTelemetry, ViewMode } from './types';
 import { ControlView } from './views/ControlView';
 import { HistoryView } from './views/HistoryView';
 import { LoginView } from './views/LoginView';
-import { Car, LogOut, Database, Monitor, Gamepad2 } from 'lucide-react';
+import { MonitorView } from './views/MonitorView';
+
+const roleMeta = {
+  operator: {
+    label: '操作员',
+    description: '可接管、可控制、可结束接管',
+    icon: ShieldCheck,
+    badgeClass: 'bg-emerald-500/15 text-emerald-200 border-emerald-400/30'
+  },
+  dispatcher: {
+    label: '观察员',
+    description: '只读查看视频、地图和回放',
+    icon: Eye,
+    badgeClass: 'bg-slate-500/15 text-slate-200 border-slate-400/30'
+  },
+  viewer: {
+    label: '观察员',
+    description: '只读查看视频、地图和回放',
+    icon: Eye,
+    badgeClass: 'bg-slate-500/15 text-slate-200 border-slate-400/30'
+  }
+};
+
+const operatorKeyHelpItems = [
+  { key: 'G', action: '启动远程接管，进入驾驶舱并开始录制视频' },
+  { key: 'A', action: '在主视角和广角摄像头之间切换' },
+  { key: 'M', action: '停止远程接管，结束录制并归档' }
+];
+
+const readonlyKeyHelpItems = [
+  { key: '只读', action: '当前身份不能发送接管或车辆控制指令' },
+  { key: '历史', action: '可查看已归档的接管记录和视频回放' },
+  { key: '监控', action: '可查看实时视频、地图和遥测数据' }
+];
+
+function getInitialViewMode(user: AuthenticatedUser): ViewMode {
+  return user.role === 'viewer' ? 'HISTORY' : 'MONITOR';
+}
+
+type AppTheme = 'dark' | 'light';
+
+function getInitialTheme(): AppTheme {
+  try {
+    const saved = localStorage.getItem('clouddrive_login_theme');
+    if (saved === 'light' || saved === 'dark') return saved;
+  } catch {
+    // Ignore storage access errors.
+  }
+  return 'dark';
+}
 
 const App: React.FC = () => {
-  // Application State
-  const [isLoggedIn, setIsLoggedIn] = useState<boolean>(false);
+  const [authChecked, setAuthChecked] = useState(false);
+  const [currentUser, setCurrentUser] = useState<AuthenticatedUser | null>(null);
   const [viewMode, setViewMode] = useState<ViewMode>('LOGIN');
   const [telemetry, setTelemetry] = useState<VehicleTelemetry | null>(null);
-  const [currentUser, setCurrentUser] = useState<string>('');
-  
-  // History Logs State
+  const [showKeyHelp, setShowKeyHelp] = useState(false);
+  const [theme, setTheme] = useState<AppTheme>(getInitialTheme);
+  const [activeSessionStats, setActiveSessionStats] = useState({ startTime: 0, eventCount: 0 });
+
   const [historyLogs, setHistoryLogs] = useState<DriveSessionLog[]>(() => {
-      const saved = localStorage.getItem('drive_history_logs');
-      return saved ? JSON.parse(saved) : [];
+    const saved = localStorage.getItem('drive_history_logs');
+    return saved ? JSON.parse(saved) : [];
   });
 
-  // 会话统计 Ref
   const sessionStartTimeRef = useRef<number>(0);
   const sessionEventCountRef = useRef<number>(0);
-  
-  // 专门用于记录“远程控制接管”开始时间的 Ref
   const controlStartTimeRef = useRef<number>(0);
-
   const lastStatusRef = useRef<VehicleStatus>(VehicleStatus.NORMAL);
   const viewModeRef = useRef<ViewMode>(viewMode);
+  const telemetryBufferRef = useRef<VehicleTelemetry[]>([]);
+  const activeDriveSessionIdRef = useRef<string | null>(null);
 
-  // --- Effects ---
+  const canControl = currentUser?.role === 'operator';
+  const roleInfo = currentUser ? roleMeta[currentUser.role] : null;
+  const RoleIcon = roleInfo?.icon || ShieldCheck;
+  const ThemeIcon = theme === 'dark' ? Sun : Moon;
+
+  const keyHelpItems = useMemo(
+    () => canControl ? operatorKeyHelpItems : readonlyKeyHelpItems,
+    [canControl]
+  );
+
+  useEffect(() => {
+    validateStoredSession()
+      .then((session) => {
+        if (session?.user) {
+          setCurrentUser(session.user);
+          setViewMode(getInitialViewMode(session.user));
+          sessionStartTimeRef.current = Date.now();
+          setActiveSessionStats({ startTime: sessionStartTimeRef.current, eventCount: 0 });
+        }
+      })
+      .finally(() => setAuthChecked(true));
+  }, []);
+
   useEffect(() => {
     viewModeRef.current = viewMode;
   }, [viewMode]);
 
   useEffect(() => {
-      localStorage.setItem('drive_history_logs', JSON.stringify(historyLogs));
-  }, [historyLogs]);
+    try {
+      localStorage.setItem('clouddrive_login_theme', theme);
+    } catch {
+      // Ignore storage access errors.
+    }
+  }, [theme]);
 
   useEffect(() => {
-    if (isLoggedIn) {
-      console.log("正在订阅遥测数据...");
-      vehicleService.connect();
-      setViewMode('MONITOR');
+    localStorage.setItem('drive_history_logs', JSON.stringify(historyLogs));
+  }, [historyLogs]);
 
-      const unsubscribe = vehicleService.subscribe((data) => {
-        setTelemetry(data);
-        if (data.status === VehicleStatus.CRITICAL && lastStatusRef.current !== VehicleStatus.CRITICAL) {
-            sessionEventCountRef.current += 1;
-            console.warn("记录事件: 检测到异常");
-        }
-        lastStatusRef.current = data.status;
-
-        // 遇到严重故障自动跳转到控制页
-        if (data.status === VehicleStatus.CRITICAL && viewModeRef.current !== 'CONTROL') {
-            if (viewModeRef.current === 'MONITOR') {
-                // 自动触发接管
-                handleStartControl();
-            }
-        }
-      });
-
-      return () => {
-        unsubscribe();
-        vehicleService.disconnect();
-      };
-    }
-  }, [isLoggedIn]);
-
-  // --- Handlers ---
-  const handleLoginSuccess = (username: string) => {
-      setCurrentUser(username);
-      setIsLoggedIn(true);
-      sessionStartTimeRef.current = Date.now();
-      sessionEventCountRef.current = 0;
-      lastStatusRef.current = VehicleStatus.NORMAL;
+  const handleLoginSuccess = (session: AuthSession) => {
+    setCurrentUser(session.user);
+    setViewMode(getInitialViewMode(session.user));
+    sessionStartTimeRef.current = Date.now();
+    sessionEventCountRef.current = 0;
+    setActiveSessionStats({ startTime: sessionStartTimeRef.current, eventCount: 0 });
+    lastStatusRef.current = VehicleStatus.NORMAL;
   };
 
   const handleLogout = () => {
-      setIsLoggedIn(false);
-      setViewMode('LOGIN');
-      setTelemetry(null);
-      setCurrentUser('');
+    clearStoredSession();
+    setCurrentUser(null);
+    setViewMode('LOGIN');
+    setTelemetry(null);
+    setActiveSessionStats({ startTime: 0, eventCount: 0 });
+    telemetryBufferRef.current = [];
+    activeDriveSessionIdRef.current = null;
+    vehicleService.disconnect();
   };
 
-  // 开始接管
-  const handleStartControl = () => {
-      vehicleService.triggerManualTakeover();
-      controlStartTimeRef.current = Date.now(); // 记录接管开始时间
-      setViewMode('CONTROL');
-  };
+  const handleStartControl = useCallback(async () => {
+    if (!canControl) return;
 
-  // 结束接管并生成数据
-  const handleExitControl = () => {
-      // 1. 发送释放控制指令给车端
-      vehicleService.triggerControlRelease();
+    telemetryBufferRef.current = [];
+    sessionEventCountRef.current = 0;
+    setActiveSessionStats((prev) => ({ ...prev, eventCount: 0 }));
 
-      // 2. 计算本次接管时长
-      const endTime = Date.now();
-      const startTime = controlStartTimeRef.current || sessionStartTimeRef.current;
-      const durationSeconds = (endTime - startTime) / 1000;
+    try {
+      const session = await startDriveSession();
+      activeDriveSessionIdRef.current = session.id;
+    } catch (err) {
+      console.warn('无法启动视频录制，仍将进入接管模式:', err);
+      alert('视频录制启动失败，但仍会进入接管模式。请检查服务器视频流或 ffmpeg。');
+    }
 
-      // 3. 生成接管数据日志 (DriveSessionLog)
-      const newLog: DriveSessionLog = {
-          id: `RC_${Date.now().toString().slice(-6)}`, // RC = Remote Control
-          startTime: new Date(startTime).toLocaleString(),
-          endTime: new Date(endTime).toLocaleString(),
-          operator: currentUser,
-          // 如果接管期间有异常，记录异常数，否则记为0或1（本次接管本身算一次事件）
-          events: sessionEventCountRef.current > 0 ? sessionEventCountRef.current : 1, 
-          status: 'Completed' // 接管成功完成
-      };
+    vehicleService.triggerManualTakeover();
+    controlStartTimeRef.current = Date.now();
+    setViewMode('CONTROL');
+  }, [canControl]);
 
-      // 4. 保存到历史记录
-      setHistoryLogs(prev => [newLog, ...prev]);
-      
-      // 5. 重置本次会话的异常计数（可选，看需求是累计还是分段）
-      sessionEventCountRef.current = 0; 
+  const handleExitControl = useCallback(async () => {
+    if (!canControl) return;
 
-      console.log("接管结束，数据已生成:", newLog);
-      alert(`接管结束。\n持续时间: ${durationSeconds.toFixed(1)}秒\n数据已归档至“数据回放”中。`);
+    vehicleService.triggerControlRelease();
 
-      // 6. 返回监控界面
-      setViewMode('MONITOR');
-  };
+    const endTime = Date.now();
+    const startTime = controlStartTimeRef.current || sessionStartTimeRef.current;
+    const durationSeconds = (endTime - startTime) / 1000;
+    const eventCount = sessionEventCountRef.current > 0 ? sessionEventCountRef.current : 1;
 
-  // --- Views ---
-  if (!isLoggedIn) {
+    const sessionId = activeDriveSessionIdRef.current;
+    if (sessionId) {
+      try {
+        await stopDriveSession(sessionId, eventCount);
+      } catch (err) {
+        console.warn('停止视频录制失败:', err);
+        alert('接管已结束，但视频录制停止/归档失败，请查看服务器日志。');
+      } finally {
+        activeDriveSessionIdRef.current = null;
+      }
+    }
+
+    const newLog: DriveSessionLog = {
+      id: sessionId || `RC_${Date.now().toString().slice(-6)}`,
+      startTime: new Date(startTime).toLocaleString(),
+      endTime: new Date(endTime).toLocaleString(),
+      operator: currentUser?.username || 'operator',
+      events: eventCount,
+      status: 'Completed',
+      telemetrySamples: telemetryBufferRef.current.slice()
+    };
+
+    setHistoryLogs((prev) => [newLog, ...prev]);
+
+    try {
+      const host = window.location.hostname || 'localhost';
+      const replayUrl = `${window.location.protocol}//${host}:9001/logs`;
+      const token = getStoredSession()?.token;
+      fetch(replayUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {})
+        },
+        body: JSON.stringify(newLog)
+      }).catch((err) => console.warn('无法推送回放到 replay-server', err));
+    } catch {
+      // ignore network/storage issues
+    }
+
+    sessionEventCountRef.current = 0;
+    telemetryBufferRef.current = [];
+    setActiveSessionStats((prev) => ({ ...prev, eventCount: 0 }));
+
+    alert(`接管结束。\n持续时间: ${durationSeconds.toFixed(1)}秒\n本次数据与视频已归档。`);
+    setViewMode('MONITOR');
+  }, [canControl, currentUser?.username]);
+
+  useEffect(() => {
+    if (!currentUser) return;
+
+    console.log('正在订阅遥测数据...');
+    vehicleService.connect();
+
+    const unsubscribe = vehicleService.subscribe((data) => {
+      setTelemetry(data);
+
+      if (viewModeRef.current === 'CONTROL') {
+        telemetryBufferRef.current.push(data);
+      }
+
+      if (data.status === VehicleStatus.CRITICAL && lastStatusRef.current !== VehicleStatus.CRITICAL) {
+        sessionEventCountRef.current += 1;
+        setActiveSessionStats((prev) => ({ ...prev, eventCount: sessionEventCountRef.current }));
+        console.warn('记录事件: 检测到异常');
+      }
+      lastStatusRef.current = data.status;
+
+    });
+
+    return () => {
+      unsubscribe();
+      vehicleService.disconnect();
+    };
+  }, [currentUser, canControl, handleStartControl]);
+
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (!canControl) return;
+      if (e.repeat) return;
+
+      const active = document.activeElement && (document.activeElement as HTMLElement).tagName;
+      if (active === 'INPUT' || active === 'TEXTAREA' || active === 'SELECT' || active === 'BUTTON') return;
+
+      const key = e.key.toLowerCase();
+      if (key === 'g') {
+        e.preventDefault();
+        if (viewModeRef.current !== 'CONTROL') handleStartControl();
+      }
+      if (key === 'm') {
+        e.preventDefault();
+        if (viewModeRef.current === 'CONTROL') handleExitControl();
+      }
+    };
+
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [canControl, handleExitControl, handleStartControl]);
+
+  if (!authChecked) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-[#050510] text-blue-300">
+        <div className="flex flex-col items-center gap-4">
+          <div className="w-12 h-12 border-4 border-blue-500/30 border-t-blue-500 rounded-full animate-spin" />
+          <span className="font-tech text-lg tracking-widest">正在验证登录状态...</span>
+        </div>
+      </div>
+    );
+  }
+
+  if (!currentUser) {
     return <LoginView onLoginSuccess={handleLoginSuccess} />;
   }
 
   return (
-    <div className="flex flex-col h-screen bg-[#050510] overflow-hidden font-sans text-gray-200">
-      
-      {/* 1. 全局导航栏 */}
-      <div className="h-16 bg-[#0a0a16]/90 backdrop-blur-md border-b border-white/10 flex items-center justify-between px-6 shrink-0 z-50 shadow-lg">
-          
-          {/* Logo 区域 */}
-          <div className="flex items-center gap-3">
-              <div className="w-8 h-8 bg-blue-600 rounded flex items-center justify-center shadow-[0_0_15px_rgba(37,99,235,0.5)]">
-                 <Car className="text-white" size={20} />
+    <div className="app-shell flex flex-col h-screen overflow-hidden font-sans" data-theme={theme}>
+      <div className="app-topbar h-16 backdrop-blur-md flex items-center justify-between px-6 shrink-0 z-50 shadow-lg">
+        <div className="flex items-center gap-3 min-w-0">
+          <div className="app-brand-mark w-8 h-8 rounded flex items-center justify-center shrink-0">
+            <Car className="text-white" size={20} />
+          </div>
+          <div className="min-w-0">
+            <h1 className="app-brand-title font-tech text-xl font-bold tracking-wider leading-none truncate">
+              车路云融合远程驾驶
+            </h1>
+            <span className="app-brand-subtitle text-[10px] font-mono tracking-widest block mt-0.5">5G 远程驾驶控制平台</span>
+            <span className="text-[10px] text-gray-500 font-mono tracking-widest block mt-0.5">5G 远程驾驶云控平台</span>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={() => setTheme((current) => (current === 'dark' ? 'light' : 'dark'))}
+            className="app-theme-button hidden sm:flex items-center gap-2 px-3 py-2 rounded-md text-sm font-tech font-bold transition-all"
+            title={theme === 'dark' ? '白天模式' : '黑夜模式'}
+          >
+            <ThemeIcon size={16} /> {theme === 'dark' ? '白天' : '黑夜'}
+          </button>
+
+          <div className={`app-role-badge hidden md:flex items-center gap-2 border px-3 py-1.5 rounded-md ${roleInfo?.badgeClass}`}>
+            <RoleIcon size={15} />
+            <span className="text-xs font-bold">{currentUser.username}</span>
+            <span className="text-[10px] opacity-70">{roleInfo?.label}</span>
+          </div>
+
+          <div className="app-tabs flex rounded-md overflow-hidden">
+            <button
+              onClick={() => setViewMode('MONITOR')}
+              data-label="监控"
+              className={`app-tab px-3 py-2 text-xs md:text-sm rounded-none ${viewMode === 'MONITOR' ? 'is-active' : ''}`}
+            >
+              监控
+            </button>
+            <button
+              onClick={() => setViewMode('HISTORY')}
+              data-label="历史"
+              className={`app-tab px-3 py-2 text-xs md:text-sm rounded-none ${viewMode === 'HISTORY' ? 'is-active' : ''}`}
+            >
+              历史
+            </button>
+          </div>
+
+          <button
+            onClick={() => setShowKeyHelp(true)}
+            data-label="按键"
+            className="app-action-button hidden sm:flex items-center gap-2 px-3 py-2 rounded-md text-sm font-tech font-bold transition-all"
+          >
+            <Keyboard size={16} /> 按键
+          </button>
+
+          <button
+            onClick={handleLogout}
+            data-label="退出"
+            className="app-logout-button flex items-center gap-2 px-3 py-2 rounded-md text-sm font-bold transition-all"
+          >
+            <LogOut size={16} /> 退出
+          </button>
+        </div>
+      </div>
+
+      <div className="app-main flex-1 overflow-auto relative">
+        {!telemetry && viewMode !== 'HISTORY' ? (
+          <div className="flex h-full flex-col items-center justify-center text-blue-400 gap-4">
+            <div className="w-12 h-12 border-4 border-blue-500/30 border-t-blue-500 rounded-full animate-spin" />
+            <span className="font-tech text-xl tracking-widest">正在建立 V2X 连接...</span>
+          </div>
+        ) : (
+          <>
+            {viewMode === 'MONITOR' && telemetry && (
+              <MonitorView
+                telemetry={telemetry}
+                onTakeover={handleStartControl}
+                canTakeover={canControl}
+                roleLabel={roleInfo?.label || ''}
+              />
+            )}
+            {viewMode === 'CONTROL' && telemetry && canControl && (
+              <ControlView
+                telemetry={telemetry}
+                onExitControl={handleExitControl}
+              />
+            )}
+            {viewMode === 'CONTROL' && !canControl && (
+              <div className="h-full flex items-center justify-center text-slate-300">
+                当前身份为{roleInfo?.label}，不能进入远程驾驶控制舱。
+              </div>
+            )}
+            {viewMode === 'HISTORY' && (
+              <HistoryView
+                logs={historyLogs}
+                activeSession={{
+                  startTime: activeSessionStats.startTime,
+                  eventCount: activeSessionStats.eventCount,
+                  operator: currentUser.username
+                }}
+              />
+            )}
+          </>
+        )}
+      </div>
+
+      {showKeyHelp && (
+        <div className="fixed inset-0 z-[100] bg-black/70 backdrop-blur-sm flex items-center justify-center px-4">
+          <div className="w-full max-w-lg bg-[#0a0a16] border border-blue-500/30 rounded-xl shadow-[0_0_50px_rgba(37,99,235,0.25)] p-6">
+            <div className="flex items-center gap-3 mb-5">
+              <div className="w-9 h-9 rounded bg-blue-600 flex items-center justify-center">
+                <Keyboard size={20} />
               </div>
               <div>
-                  <h1 className="font-tech text-xl font-bold text-white tracking-wider leading-none">CloudDrive <span className="text-blue-400">Pilot</span></h1>
-                  <span className="text-[10px] text-gray-500 font-mono tracking-widest block mt-0.5">5G 远程驾驶云控平台</span>
+                <h2 className="text-xl font-tech font-bold text-white">权限与快捷操作</h2>
+                <p className="text-xs text-gray-500 mt-1">{roleInfo?.description}</p>
               </div>
-          </div>
+            </div>
 
-          {/* 中间菜单 */}
-          <div className="flex items-center bg-black/30 p-1 rounded-lg border border-white/5">
-              <button 
-                onClick={() => setViewMode('MONITOR')}
-                className={`flex items-center gap-2 px-5 py-1.5 rounded-md text-sm font-tech font-bold transition-all ${viewMode === 'MONITOR' ? 'bg-blue-600 text-white shadow-lg' : 'text-gray-400 hover:text-white hover:bg-white/5'}`}
+            <div className="space-y-3">
+              {keyHelpItems.map((item) => (
+                <div key={item.key} className="flex items-center gap-4 bg-black/35 border border-white/10 rounded-lg px-4 py-3">
+                  <div className="w-12 h-12 rounded-md bg-white/10 border border-white/15 flex items-center justify-center text-sm font-bold text-blue-200 font-mono">
+                    {item.key}
+                  </div>
+                  <div className="text-sm text-gray-200">{item.action}</div>
+                </div>
+              ))}
+            </div>
+
+            <div className="flex justify-center mt-6">
+              <button
+                onClick={() => setShowKeyHelp(false)}
+                className="bg-blue-600 hover:bg-blue-500 text-white px-8 py-2 rounded-md text-sm font-bold transition-colors"
               >
-                  <Monitor size={16} /> 实时监控
+                已知晓
               </button>
-              <button 
-                onClick={() => setViewMode('CONTROL')}
-                className={`flex items-center gap-2 px-5 py-1.5 rounded-md text-sm font-tech font-bold transition-all ${viewMode === 'CONTROL' ? 'bg-rose-600 text-white shadow-[0_0_10px_rgba(225,29,72,0.4)] animate-pulse-slow' : 'text-gray-400 hover:text-white hover:bg-white/5'}`}
-              >
-                  <Gamepad2 size={16} /> 远程控车
-              </button>
-              <button 
-                onClick={() => setViewMode('HISTORY')}
-                className={`flex items-center gap-2 px-5 py-1.5 rounded-md text-sm font-tech font-bold transition-all ${viewMode === 'HISTORY' ? 'bg-blue-600 text-white shadow-lg' : 'text-gray-400 hover:text-white hover:bg-white/5'}`}
-              >
-                  <Database size={16} /> 数据回放
-              </button>
+            </div>
           </div>
-
-          {/* 右侧状态区 */}
-          <div className="flex items-center gap-6">
-              <div className="text-gray-500">操作员：<span className="text-blue-300">{currentUser}</span></div>
-              <div className="h-6 w-px bg-white/10"></div>
-              <button onClick={handleLogout} className="text-gray-400 hover:text-red-400 transition-colors" title="退出登录">
-                  <LogOut size={20} />
-              </button>
-          </div>
-      </div>
-
-      {/* 2. 内容区域 */}
-      <div className="flex-1 overflow-auto relative bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-100">
-         {!telemetry && viewMode !== 'HISTORY' ? (
-             <div className="flex h-full flex-col items-center justify-center text-blue-400 gap-4">
-                 <div className="w-12 h-12 border-4 border-blue-500/30 border-t-blue-500 rounded-full animate-spin"></div>
-                 <span className="font-tech text-xl tracking-widest">正在建立 V2X 连接...</span>
-             </div>
-         ) : (
-             <>
-                {viewMode === 'MONITOR' && telemetry && (
-                    <MonitorView 
-                        telemetry={telemetry} 
-                        onTakeover={handleStartControl} 
-                    />
-                )}
-                {viewMode === 'CONTROL' && telemetry && (
-                    <ControlView 
-                        telemetry={telemetry} 
-                        onExitControl={handleExitControl} 
-                    />
-                )}
-                {viewMode === 'HISTORY' && (
-                    <HistoryView 
-                        logs={historyLogs} 
-                        activeSession={{
-                            startTime: sessionStartTimeRef.current,
-                            eventCount: sessionEventCountRef.current,
-                            operator: currentUser
-                        }}
-                    />
-                )}
-             </>
-         )}
-      </div>
-
+        </div>
+      )}
     </div>
   );
 };

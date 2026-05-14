@@ -1,3 +1,13 @@
 node_modules/
 nul
 *.log
+.env
+.env.*
+!/.env.example
+dist/
+backups/
+replay-data/
+__pycache__/
+*.pyc
+*.swp
+*.tar.gz

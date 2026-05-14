@@ -1,4 +1,5 @@
 import { Gear, VehicleStatus, VehicleTelemetry } from '../types';
+import { sendCarCommand } from './carControl';
 
 /**
  * 服务层：车辆通讯连接管理 (Vehicle Connection Service)
@@ -15,9 +16,11 @@ class VehicleConnectionService {
   private subscribers: TelemetryCallback[] = [];
   
   // --- 模拟相关变量 ---
-  private intervalId: any = null;
+  private intervalId: ReturnType<typeof setInterval> | null = null;
   private currentData: VehicleTelemetry = this.getInitialData();
   private isSimulatingAnomaly: boolean = false;
+  private pc: RTCPeerConnection | null = null;
+  private streamCallback: ((stream: MediaStream) => void) | null = null;
 
   private getInitialData(): VehicleTelemetry {
     return {
@@ -28,9 +31,9 @@ class VehicleConnectionService {
       steeringAngle: 0,
       batteryLevel: 85,
       temperature: 36,
-      // 东南大学成贤学院 (大致坐标)
-      latitude: 32.1633, 
-      longitude: 118.6985,
+      // 东南大学成贤学院东大路 6 号校园中心附近
+      latitude: 32.1565, 
+      longitude: 118.7076,
       latencyMs: 15,
       status: VehicleStatus.NORMAL
     };
@@ -62,6 +65,9 @@ class VehicleConnectionService {
 
   public disconnect() {
     if (this.intervalId) clearInterval(this.intervalId);
+    this.intervalId = null;
+    this.pc?.close();
+    this.pc = null;
     console.log("连接已关闭");
   }
 
@@ -160,23 +166,26 @@ class VehicleConnectionService {
   // ============================================================
   //  3. 控制指令 & 模拟逻辑
   // ============================================================
-  public sendControlCommand(command: string, value: any) {
+  public async sendControlCommand(command: string, value: unknown) {
     console.log(`[指令下发 Cloud->Car] ${command}:`, value);
-    // 通过 HTTP 发送控制指令到小车（见 carControl.ts）
+    await sendCarCommand(command, value);
   }
 
-  public triggerManualTakeover() {
-    this.sendControlCommand('TAKEOVER_REQUEST', true);
+  public async triggerManualTakeover() {
+    await this.sendControlCommand('TAKEOVER_REQUEST', true);
   }
 
   // 发送释放控制指令，结束远程接管
-  public triggerControlRelease() {
-    this.sendControlCommand('CONTROL_RELEASE', true);
-    // 如果处于模拟异常状态，自动消除异常，让车恢复正常
-    if (this.isSimulatingAnomaly) {
-        this.isSimulatingAnomaly = false;
-        // 强制重置状态为 NORMAL
-        this.currentData.status = VehicleStatus.NORMAL;
+  public async triggerControlRelease() {
+    try {
+        await this.sendControlCommand('CONTROL_RELEASE', true);
+    } finally {
+        // 如果处于模拟异常状态，自动消除异常，让车恢复正常
+        if (this.isSimulatingAnomaly) {
+            this.isSimulatingAnomaly = false;
+            // 强制重置状态为 NORMAL
+            this.currentData.status = VehicleStatus.NORMAL;
+        }
     }
   }
 
@@ -201,7 +210,7 @@ class VehicleConnectionService {
     const newSteering = this.currentData.steeringAngle + (Math.random() * 10 - 5);
     // 模拟车辆缓慢移动 (经纬度微小变化)
     let newLat = this.currentData.latitude;
-    let newLng = this.currentData.longitude;
+    const newLng = this.currentData.longitude;
     
     if (isMoving) {
         newLat += 0.00005 * (newSpeed / 30); 
@@ -231,6 +240,15 @@ class VehicleConnectionService {
   
   public setGear(gear: Gear) {
       this.currentData.gear = gear;
+  }
+
+  public subscribeStream(callback: (stream: MediaStream) => void) {
+      this.streamCallback = callback;
+      return () => {
+          if (this.streamCallback === callback) {
+              this.streamCallback = null;
+          }
+      };
   }
 }
 

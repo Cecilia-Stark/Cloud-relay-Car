@@ -2,12 +2,26 @@
 
 // ⚠️ 小车 IP 地址 - 已通过 Web 界面配置
 // 使用本地视频代理解决跨域问题
-let CAR_IP = localStorage.getItem('car_ip') || 'localhost';
 const CAR_PORT = 8000;
 const PROXY_PORT = 8001;
-const CONTROL_URL = `http://${CAR_IP}:${CAR_PORT}/control`;
-// 视频流通过本地代理转发（解决跨域和网络问题）
-const VIDEO_URL = `http://localhost:${PROXY_PORT}/`;
+
+function getRuntimeHost(): string {
+  if (typeof window === 'undefined') return 'localhost';
+  return window.location.hostname || 'localhost';
+}
+
+function getHttpProtocol(): string {
+  if (typeof window === 'undefined') return 'http:';
+  return window.location.protocol === 'https:' ? 'https:' : 'http:';
+}
+
+let CAR_IP = localStorage.getItem('car_ip') || getRuntimeHost();
+// 视频流通过服务器上的本地代理转发（解决跨域和远程访问问题）
+const VIDEO_URL = `${getHttpProtocol()}//${getRuntimeHost()}:${PROXY_PORT}/`;
+
+function getCloudControlUrl(): string {
+  return `${getHttpProtocol()}//${getRuntimeHost()}:8083/vehicle-control`;
+}
 
 export interface CarControlState {
   linear: number;
@@ -17,22 +31,7 @@ export interface CarControlState {
 /**
  * 发送控制指令到小车
  */
-export async function sendCarCommand(type: string, value?: any): Promise<void> {
-  try {
-    const response = await fetch(CONTROL_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ type, value })
-    });
-    
-    if (!response.ok) {
-      console.error('小车控制指令失败:', response.status);
-    }
-  } catch (error) {
-    console.error('发送控制指令错误:', error);
-    throw error;
-  }
-}
+
 
 /**
  * 发送速度指令
@@ -66,8 +65,8 @@ export function getCarIp(): string {
  * 设置小车 IP 地址
  */
 export function setCarIp(ip: string): void {
-  CAR_IP = ip;
-  localStorage.setItem('car_ip', ip);
+  CAR_IP = ip.trim();
+  localStorage.setItem('car_ip', CAR_IP);
 }
 
 /**
@@ -77,4 +76,34 @@ export function getVideoUrl(): string {
   return VIDEO_URL;
 }
 
+import { getAuthToken } from './auth';
+
 export { CAR_IP, VIDEO_URL };
+
+// Update sendCarCommand to include Authorization header
+const _origSendCarCommand = async function(type: string, value?: any): Promise<void> {
+  try {
+    const controlUrl = getCloudControlUrl();
+    const token = getAuthToken();
+    const headers: any = { 'Content-Type': 'application/json' };
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+
+    const response = await fetch(controlUrl, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ type, value })
+    });
+
+    if (!response.ok) {
+      console.error('小车控制指令失败:', response.status);
+    }
+  } catch (error) {
+    console.error('发送控制指令错误:', error);
+    throw error;
+  }
+};
+
+// Replace export sendCarCommand
+export async function sendCarCommand(type: string, value?: any): Promise<void> {
+  return _origSendCarCommand(type, value);
+}
