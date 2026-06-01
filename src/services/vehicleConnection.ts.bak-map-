@@ -4,18 +4,12 @@ type TelemetryCallback = (data: VehicleTelemetry) => void;
 
 const DEFAULT_LAT = 32.1565;
 const DEFAULT_LNG = 118.7076;
-const POSITION_OFFSET_NORTH_METERS = 460;
-const POSITION_OFFSET_WEST_METERS = -580;
+const POSITION_OFFSET_NORTH_METERS = -400;
+const POSITION_OFFSET_WEST_METERS = 300;
 const METERS_PER_DEG_LAT = 111320;
 const POLL_INTERVAL_MS = 200;
-const VEHICLE_WHEELBASE_METERS = 1.2;
-const MAX_ROAD_WHEEL_DEGREES = 35;
 const BATTERY_EMPTY_VOLTAGE = 20.0;
 const BATTERY_FULL_VOLTAGE = 25.6;
-const ORIGIN_LAT = DEFAULT_LAT + POSITION_OFFSET_NORTH_METERS / METERS_PER_DEG_LAT;
-const ORIGIN_LNG = DEFAULT_LNG - POSITION_OFFSET_WEST_METERS / (METERS_PER_DEG_LAT * Math.cos(DEFAULT_LAT * Math.PI / 180));
-const METERS_PER_DEG_LNG_AT_ORIGIN = METERS_PER_DEG_LAT * Math.cos(ORIGIN_LAT * Math.PI / 180);
-const POSITION_MOVE_EPSILON_METERS = 0.02;
 
 function getRelayStatusUrl(): string {
   return '/api/status';
@@ -27,32 +21,11 @@ function voltageToBatteryPercentage(voltage: number): number {
   return Math.min(100, Math.max(0, percent));
 }
 
-function clamp(value: number, min: number, max: number) {
-  return Math.min(max, Math.max(min, value));
-}
-
-function finiteNumber(value: unknown, fallback = 0) {
-  const n = Number(value);
-  return Number.isFinite(n) ? n : fallback;
-}
-
-function degreesToRadians(value: number) {
-  return value * Math.PI / 180;
-}
-
-function isReverseGear(gear: unknown) {
-  const normalized = String(gear ?? '').trim().toLowerCase();
-  return normalized === 'r' || normalized === 'reverse' || normalized === '-1';
-}
-
 class VehicleConnectionService {
   private subscribers: TelemetryCallback[] = [];
   private intervalId: ReturnType<typeof setInterval> | null = null;
   private currentData: VehicleTelemetry = this.emptyTelemetry();
   private isSimulatingAnomaly = false;
-  private demoPose = { x: 0, y: 0, yaw: 0 };
-  private lastRobotPose: { x: number; y: number; yaw: number } | null = null;
-  private lastDemoUpdateMs = Date.now();
 
   private emptyTelemetry(): VehicleTelemetry {
     return {
@@ -61,8 +34,8 @@ class VehicleConnectionService {
       robotConnected: false,
       g29: null,
       speedKmh: 0,
-      latitude: ORIGIN_LAT,
-      longitude: ORIGIN_LNG,
+      latitude: DEFAULT_LAT + POSITION_OFFSET_NORTH_METERS / METERS_PER_DEG_LAT,
+      longitude: DEFAULT_LNG - POSITION_OFFSET_WEST_METERS / (METERS_PER_DEG_LAT * Math.cos(DEFAULT_LAT * Math.PI / 180)),
       status: VehicleStatus.NORMAL
     };
   }
@@ -96,17 +69,22 @@ class VehicleConnectionService {
         const g29: G29Input | null = payload.last_g29 || null;
 
         let speedKmh = 0;
-        let lat = ORIGIN_LAT;
-        let lng = ORIGIN_LNG;
+        let lat = DEFAULT_LAT + POSITION_OFFSET_NORTH_METERS / METERS_PER_DEG_LAT;
+        let lng = DEFAULT_LNG - POSITION_OFFSET_WEST_METERS / (METERS_PER_DEG_LAT * Math.cos(DEFAULT_LAT * Math.PI / 180));
 
         if (robotTelemetry) {
-          const vehicleSpeed = finiteNumber(robotTelemetry.vehicle?.speed, NaN);
-          const rawSpeed = Math.abs(robotTelemetry.velocity?.linear ?? 0);
-          speedKmh = Number.isFinite(vehicleSpeed) ? Math.abs(vehicleSpeed) : rawSpeed * 3.6;
+          speedKmh = Math.abs((robotTelemetry.velocity?.linear ?? 0) * 3.6);
 
-          const pose = this.advanceVehiclePose(robotTelemetry);
-          lat = ORIGIN_LAT + pose.y / METERS_PER_DEG_LAT;
-          lng = ORIGIN_LNG + pose.x / METERS_PER_DEG_LNG_AT_ORIGIN;
+          if (robotTelemetry.gps?.latitude != null && robotTelemetry.gps?.longitude != null) {
+            lat = robotTelemetry.gps.latitude + POSITION_OFFSET_NORTH_METERS / METERS_PER_DEG_LAT;
+            lng = robotTelemetry.gps.longitude - POSITION_OFFSET_WEST_METERS / (METERS_PER_DEG_LAT * Math.cos(robotTelemetry.gps.latitude * Math.PI / 180));
+          } else {
+            // fallback: use odom x/y converted to lat/lng
+            const x = robotTelemetry.position?.x ?? 0;
+            const y = robotTelemetry.position?.y ?? 0;
+            lat = DEFAULT_LAT + y / METERS_PER_DEG_LAT + POSITION_OFFSET_NORTH_METERS / METERS_PER_DEG_LAT;
+            lng = DEFAULT_LNG + x / (METERS_PER_DEG_LAT * Math.cos(DEFAULT_LAT * Math.PI / 180)) - POSITION_OFFSET_WEST_METERS / (METERS_PER_DEG_LAT * Math.cos(DEFAULT_LAT * Math.PI / 180));
+          }
         }
 
         let status = VehicleStatus.NORMAL;
@@ -159,58 +137,6 @@ class VehicleConnectionService {
 
   private notifySubscribers(data: VehicleTelemetry) {
     this.subscribers.forEach(cb => cb(data));
-  }
-
-  private advanceVehiclePose(robotTelemetry: RobotTelemetry) {
-    const now = Date.now();
-    const dt = clamp((now - this.lastDemoUpdateMs) / 1000, 0.02, 0.5);
-    this.lastDemoUpdateMs = now;
-
-    const vehicleSpeedKmh = finiteNumber(robotTelemetry.vehicle?.speed, NaN);
-    const odomSpeedMps = finiteNumber(robotTelemetry.velocity?.linear, NaN);
-    const hasVehicleSpeed = Number.isFinite(vehicleSpeedKmh) && Math.abs(vehicleSpeedKmh) > 0.05;
-    const hasOdomSpeed = Number.isFinite(odomSpeedMps) && Math.abs(odomSpeedMps) > 0.02;
-
-    if (!hasVehicleSpeed && !hasOdomSpeed) {
-      const directPose = this.resolveDirectRobotPose(robotTelemetry);
-      if (directPose) return directPose;
-      return { ...this.demoPose, demoSpeedMps: 0 };
-    }
-
-    const direction = isReverseGear(robotTelemetry.vehicle?.gear) ? -1 : 1;
-    const speedMps = hasVehicleSpeed
-      ? Math.abs(vehicleSpeedKmh) / 3.6 * direction
-      : odomSpeedMps;
-    const steeringDegrees = clamp(
-      finiteNumber(robotTelemetry.vehicle?.steering_angle, 0),
-      -MAX_ROAD_WHEEL_DEGREES,
-      MAX_ROAD_WHEEL_DEGREES
-    );
-    const steeringRadians = degreesToRadians(steeringDegrees);
-    const yawRate = Math.abs(steeringRadians) < 0.001
-      ? 0
-      : speedMps / VEHICLE_WHEELBASE_METERS * Math.tan(steeringRadians);
-
-    this.demoPose.yaw += yawRate * dt;
-    this.demoPose.x += Math.cos(this.demoPose.yaw) * speedMps * dt;
-    this.demoPose.y += Math.sin(this.demoPose.yaw) * speedMps * dt;
-    return { ...this.demoPose, demoSpeedMps: Math.abs(speedMps) };
-  }
-
-  private resolveDirectRobotPose(robotTelemetry: RobotTelemetry) {
-    const x = finiteNumber(robotTelemetry.position?.x, NaN);
-    const y = finiteNumber(robotTelemetry.position?.y, NaN);
-    if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
-
-    const yaw = finiteNumber(robotTelemetry.position?.yaw, this.demoPose.yaw);
-    const last = this.lastRobotPose;
-    const moved = !last || Math.hypot(x - last.x, y - last.y) > POSITION_MOVE_EPSILON_METERS;
-    this.lastRobotPose = { x, y, yaw };
-
-    if (!moved) return null;
-
-    this.demoPose = { x, y, yaw };
-    return { ...this.demoPose, demoSpeedMps: 0 };
   }
 
   // ============================================================

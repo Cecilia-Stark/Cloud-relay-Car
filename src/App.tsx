@@ -2,7 +2,6 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Car, Eye, Keyboard, LogOut, Moon, ShieldCheck, Sun } from 'lucide-react';
 import { vehicleService } from './services/vehicleConnection';
 import { AuthSession, clearStoredSession, getStoredSession, validateStoredSession } from './services/auth';
-import { startDriveSession, stopDriveSession } from './services/sessionArchive';
 import { AuthenticatedUser, DriveSessionLog, VehicleStatus, VehicleTelemetry, ViewMode } from './types';
 import { ControlView } from './views/ControlView';
 import { HistoryView } from './views/HistoryView';
@@ -78,7 +77,6 @@ const App: React.FC = () => {
   const lastStatusRef = useRef<VehicleStatus>(VehicleStatus.NORMAL);
   const viewModeRef = useRef<ViewMode>(viewMode);
   const telemetryBufferRef = useRef<VehicleTelemetry[]>([]);
-  const activeDriveSessionIdRef = useRef<string | null>(null);
 
   const canControl = currentUser?.role === 'operator';
   const roleInfo = currentUser ? roleMeta[currentUser.role] : null;
@@ -135,7 +133,6 @@ const App: React.FC = () => {
     setTelemetry(null);
     setActiveSessionStats({ startTime: 0, eventCount: 0 });
     telemetryBufferRef.current = [];
-    activeDriveSessionIdRef.current = null;
     vehicleService.disconnect();
   };
 
@@ -147,14 +144,10 @@ const App: React.FC = () => {
     setActiveSessionStats((prev) => ({ ...prev, eventCount: 0 }));
 
     try {
-      const session = await startDriveSession();
-      activeDriveSessionIdRef.current = session.id;
+      await vehicleService.triggerManualTakeover();
     } catch (err) {
-      console.warn('无法启动视频录制，仍将进入接管模式:', err);
-      alert('视频录制启动失败，但仍会进入接管模式。请检查服务器视频流或 ffmpeg。');
+      console.warn('接管请求接口暂不可用，先进入本地接管状态:', err);
     }
-
-    vehicleService.triggerManualTakeover();
     controlStartTimeRef.current = Date.now();
     setViewMode('CONTROL');
   }, [canControl]);
@@ -169,20 +162,10 @@ const App: React.FC = () => {
     const durationSeconds = (endTime - startTime) / 1000;
     const eventCount = sessionEventCountRef.current > 0 ? sessionEventCountRef.current : 1;
 
-    const sessionId = activeDriveSessionIdRef.current;
-    if (sessionId) {
-      try {
-        await stopDriveSession(sessionId, eventCount);
-      } catch (err) {
-        console.warn('停止视频录制失败:', err);
-        alert('接管已结束，但视频录制停止/归档失败，请查看服务器日志。');
-      } finally {
-        activeDriveSessionIdRef.current = null;
-      }
-    }
+    const sessionId = `LOCAL_${Date.now().toString().slice(-8)}`;
 
     const newLog: DriveSessionLog = {
-      id: sessionId || `RC_${Date.now().toString().slice(-6)}`,
+      id: sessionId,
       startTime: new Date(startTime).toLocaleString(),
       endTime: new Date(endTime).toLocaleString(),
       operator: currentUser?.username || 'operator',
@@ -335,7 +318,7 @@ const App: React.FC = () => {
           <button
             onClick={() => setShowKeyHelp(true)}
             data-label="按键"
-            className="app-action-button hidden sm:flex items-center gap-2 px-3 py-2 rounded-md text-sm font-tech font-bold transition-all"
+            className="app-action-button key-help-button hidden sm:flex items-center gap-2 px-3 py-2 rounded-md text-sm font-tech font-bold transition-all"
           >
             <Keyboard size={16} /> 按键
           </button>

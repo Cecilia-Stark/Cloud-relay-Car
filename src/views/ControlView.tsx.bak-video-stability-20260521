@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Battery, Gauge, Power, Save, Settings, Wifi } from 'lucide-react';
 import { HttpFlvPlayer } from '../components/HttpFlvPlayer';
 import { MapContainer } from '../components/MapContainer';
@@ -45,8 +45,6 @@ interface G29RelayStatus {
 type ControlTheme = 'dark' | 'light';
 const G29_DATA_STALE_MS = 10000;
 const KEYBOARD_LINEAR_SPEED = 0.5;
-const LOCAL_VIDEO_RECORDING_ENABLED = import.meta.env.VITE_ENABLE_LOCAL_VIDEO_RECORDING === 'true';
-const LOCAL_RECORDING_VIDEO_BPS = Number(import.meta.env.VITE_LOCAL_RECORDING_VIDEO_BPS || 800_000);
 
 type RecordingTarget = 'vehicle-front' | 'roadside-4g';
 
@@ -89,15 +87,6 @@ export const ControlView: React.FC<ControlViewProps> = ({ telemetry, onExitContr
   const carCameraUrl = import.meta.env.VITE_CAR_CAMERA_URL || `/live/car.flv`;
   const wideCameraUrl = import.meta.env.VITE_WIDE_CAMERA_URL || carCameraUrl;
   const roadsideCameraUrl = import.meta.env.VITE_ROADSIDE_CAMERA_URL || `/live/car_front.flv`;
-  const carCameraFallbackSrcs = useMemo(
-    () => ['/live/car.flv'].filter((candidate) => candidate !== carCameraUrl),
-    [carCameraUrl]
-  );
-  const roadsideCameraFallbackSrcs = useMemo(
-    () => ['/live/car_front.flv', '/live/xxx.flv']
-      .filter((candidate, index, list) => candidate !== roadsideCameraUrl && list.indexOf(candidate) === index),
-    [roadsideCameraUrl]
-  );
   const displayInput = inputMode === 'keyboard'
     ? {
       status: 'connected' as const,
@@ -150,7 +139,6 @@ export const ControlView: React.FC<ControlViewProps> = ({ telemetry, onExitContr
   }, []);
 
   const startLocalRecording = useCallback((target: RecordingTarget, stream: MediaStream | null) => {
-    if (!LOCAL_VIDEO_RECORDING_ENABLED) return;
     if (!stream || localRecordingsRef.current[target]) return;
     if (!window.MediaRecorder) {
       console.warn('MediaRecorder is not supported by this browser.');
@@ -160,19 +148,16 @@ export const ControlView: React.FC<ControlViewProps> = ({ telemetry, onExitContr
     const videoTracks = stream.getVideoTracks();
     if (videoTracks.length === 0) return;
 
-    const mimeType = MediaRecorder.isTypeSupported('video/webm;codecs=vp8')
-      ? 'video/webm;codecs=vp8'
-      : MediaRecorder.isTypeSupported('video/webm;codecs=vp9')
-        ? 'video/webm;codecs=vp9'
+    const mimeType = MediaRecorder.isTypeSupported('video/webm;codecs=vp9')
+      ? 'video/webm;codecs=vp9'
+      : MediaRecorder.isTypeSupported('video/webm;codecs=vp8')
+        ? 'video/webm;codecs=vp8'
         : 'video/webm';
     const filenameTime = recordingStartedAtRef.current
       .toISOString()
       .replace(/[:.]/g, '-');
     const chunks: Blob[] = [];
-    const recorder = new MediaRecorder(new MediaStream(videoTracks), {
-      mimeType,
-      videoBitsPerSecond: Number.isFinite(LOCAL_RECORDING_VIDEO_BPS) ? LOCAL_RECORDING_VIDEO_BPS : 800_000
-    });
+    const recorder = new MediaRecorder(new MediaStream(videoTracks), { mimeType });
     const recording: LocalRecording = {
       recorder,
       chunks,
@@ -449,7 +434,6 @@ export const ControlView: React.FC<ControlViewProps> = ({ telemetry, onExitContr
             <HttpFlvPlayer
               label="Roadside 4G camera"
               src={roadsideCameraUrl}
-              fallbackSrcs={roadsideCameraFallbackSrcs}
               className="h-full"
               onStream={handleRoadsideStream}
             />
@@ -461,7 +445,6 @@ export const ControlView: React.FC<ControlViewProps> = ({ telemetry, onExitContr
               <HttpFlvPlayer
                 label="Vehicle front camera"
                 src={carCameraUrl}
-                fallbackSrcs={carCameraFallbackSrcs}
                 className="w-full h-full"
                 onStream={handleVehicleFrontStream}
               />

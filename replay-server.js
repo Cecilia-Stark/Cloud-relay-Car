@@ -488,6 +488,24 @@ function startRecordingProcess({ sessionId, outputPath }) {
     if (errorOutput.length > 4000) errorOutput = errorOutput.slice(-4000);
   });
 
+  ffmpeg.on('error', async (err) => {
+    activeRecordings.delete(sessionId);
+
+    console.error(`Recording ${sessionId} failed to start`, err);
+    if (!db) return;
+
+    try {
+      await db.execute(
+        `UPDATE drive_sessions
+         SET status = 'recording_error', error_message = ?, video_size = ?
+         WHERE id = ? AND status = 'recording'`,
+        [err.message || 'ffmpeg failed to start', fileSize(outputPath), sessionId]
+      );
+    } catch (updateErr) {
+      console.error('Failed to update recording_error session:', updateErr);
+    }
+  });
+
   ffmpeg.on('exit', async (code, signal) => {
     const active = activeRecordings.get(sessionId);
     activeRecordings.delete(sessionId);
@@ -876,6 +894,28 @@ app.get('/sessions/:id/video/download', requireVideoAccess('download'), async (r
     console.error('Failed to download session video:', err);
     res.status(500).json({ error: 'Failed to download video.' });
   }
+});
+
+app.use((err, req, res, next) => {
+  if (!err) {
+    next();
+    return;
+  }
+
+  console.error('Replay/auth request failed:', err);
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type');
+
+  if (res.headersSent) {
+    next(err);
+    return;
+  }
+
+  const isJsonSyntaxError = err instanceof SyntaxError && 'body' in err;
+  res.status(isJsonSyntaxError ? 400 : 500).json({
+    error: isJsonSyntaxError ? '请求 JSON 格式不正确。' : '服务端请求处理失败。'
+  });
 });
 
 const PORT = process.env.REPLAY_PORT || 9001;

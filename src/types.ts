@@ -1,33 +1,51 @@
-// Data definitions for the Vehicle System
+// Data definitions for the Vehicle System — real telemetry from the relay server
 
-// Enums for Gears
-export enum Gear {
-  P = 'P',
-  R = 'R',
-  N = 'N',
-  D = 'D'
-}
-
-// System Status - Determines if remote control is needed
+// System Status
 export enum VehicleStatus {
   NORMAL = 'NORMAL',
-  WARNING = 'WARNING',   // Minor issues
-  CRITICAL = 'CRITICAL', // Requires immediate takeover
+  WARNING = 'WARNING',
+  CRITICAL = 'CRITICAL',
   DISCONNECTED = 'DISCONNECTED'
 }
 
-// The core data structure transmitted from the Car -> Cloud
+// Real robot telemetry received from the relay server /api/status
+export interface RobotTelemetry {
+  position: { x: number; y: number; yaw: number };
+  velocity: { linear: number; angular: number };
+  battery: { voltage: number; percentage: number };
+  obstacle: { distance: number | null };
+  vehicle: {
+    ev_ready: boolean | null;
+    hand_brake: boolean | null;
+    gear: string | null;
+    speed: number | null;
+    steering_angle: number | null;
+  };
+  gps: { latitude: number | null; longitude: number | null; fix: string | null };
+  imu: {
+    acc_x: number | null; acc_y: number | null; acc_z: number | null;
+    gyro_x: number | null; gyro_y: number | null; gyro_z: number | null;
+  };
+}
+
+// G29 wheel data forwarded by the relay server
+export interface G29Input {
+  steer: number;
+  throttle: number;
+  brake: number;
+  source: string;
+  sent_at: number;
+}
+
+// The core data structure consumed by the UI
 export interface VehicleTelemetry {
   timestamp: number;
+  robot: RobotTelemetry | null;
+  robotConnected: boolean;
+  g29: G29Input | null;
   speedKmh: number;
-  rpm: number;
-  gear: Gear;
-  steeringAngle: number; // -450 to 450 degrees
-  batteryLevel: number;
-  temperature: number; // Engine/Battery temp
   latitude: number;
   longitude: number;
-  latencyMs: number; // Network latency
   status: VehicleStatus;
   errorMessage?: string;
 }
@@ -52,7 +70,6 @@ export interface DriveSessionLog {
   operator: string;
   events: number;
   status: 'Completed' | 'Aborted';
-  // Optional recorded telemetry samples captured during a control session
   telemetrySamples?: VehicleTelemetry[];
 }
 

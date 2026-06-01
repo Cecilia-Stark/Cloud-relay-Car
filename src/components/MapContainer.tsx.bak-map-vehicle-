@@ -230,22 +230,11 @@ export const MapContainer: React.FC<MapContainerProps> = ({ lat, lng, className 
     };
   }, []);
 
-  useEffect(() => {
-    if (!isMapReady || !window.BMapGL) return;
-
-    const point = new window.BMapGL.Point(activePoint.lng, activePoint.lat);
-    markerInstance.current?.setPosition(point);
-    labelInstance.current?.setPosition(point);
-
-    if (isFollowing) {
-      mapInstance.current?.panTo(point);
-    }
-  }, [activePoint, isFollowing, isMapReady]);
-
   const handleRecenter = () => {
     if (!mapInstance.current || !window.BMapGL) return;
 
-    const point = new window.BMapGL.Point(activePoint.lng, activePoint.lat);
+    const fixedPoint = initialPointRef.current;
+    const point = new window.BMapGL.Point(fixedPoint.lng, fixedPoint.lat);
     mapInstance.current.flyTo(point, MAP_ZOOM);
     window.setTimeout(() => {
       mapInstance.current?.setTilt(MAP_TILT);

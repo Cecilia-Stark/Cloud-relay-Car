@@ -128,7 +128,7 @@ function isValidCoordinate(lat: number, lng: number) {
 }
 
 function looksLikeCampusBaiduPoint(lat: number, lng: number) {
-  return lat > 32.156 && lat < 32.163 && lng > 118.700 && lng < 118.719;
+  return lat > 32.156 && lat < 32.163 && lng > 118.705 && lng < 118.719;
 }
 
 function normalizePoint(lat: number, lng: number) {
@@ -231,16 +231,13 @@ export const MapContainer: React.FC<MapContainerProps> = ({ lat, lng, className 
   }, []);
 
   useEffect(() => {
-    if (!isMapReady || !window.BMapGL) return;
+    if (!mapInstance.current || !window.BMapGL) return;
 
     const point = new window.BMapGL.Point(activePoint.lng, activePoint.lat);
     markerInstance.current?.setPosition(point);
     labelInstance.current?.setPosition(point);
-
-    if (isFollowing) {
-      mapInstance.current?.panTo(point);
-    }
-  }, [activePoint, isFollowing, isMapReady]);
+    if (isFollowing) mapInstance.current.panTo(point);
+  }, [activePoint, isFollowing]);
 
   const handleRecenter = () => {
     if (!mapInstance.current || !window.BMapGL) return;

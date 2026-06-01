@@ -2,8 +2,7 @@ module.exports = {
   apps: [
     {
       name: 'web-frontend',
-      script: 'npm',
-      args: 'run preview -- --host 0.0.0.0 --port 80 --strictPort',
+      script: 'web-proxy-server.cjs',
       cwd: '/root/5G-Remote-Driving-Cloud-Platform',
       env: {
         NODE_ENV: 'production'

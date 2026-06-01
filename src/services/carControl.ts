@@ -20,7 +20,7 @@ let CAR_IP = localStorage.getItem('car_ip') || getRuntimeHost();
 const VIDEO_URL = `${getHttpProtocol()}//${getRuntimeHost()}:${PROXY_PORT}/`;
 
 function getCloudControlUrl(): string {
-  return `${getHttpProtocol()}//${getRuntimeHost()}:8083/vehicle-control`;
+  return `${getHttpProtocol()}//${getRuntimeHost()}/vehicle-control`;
 }
 
 export interface CarControlState {

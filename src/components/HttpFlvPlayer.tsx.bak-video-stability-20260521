@@ -1,10 +1,9 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Radio, VideoOff } from 'lucide-react';
 
 interface HttpFlvPlayerProps {
   label: string;
   src: string;
-  fallbackSrcs?: string[];
   className?: string;
   onStream?: (stream: MediaStream | null) => void;
 }
@@ -17,13 +16,12 @@ interface SrsPlayResponse {
 }
 
 const CONNECT_TIMEOUT_MS = 10000;
-const RETRY_DELAY_MS = 1200;
-const MAX_RETRY_DELAY_MS = 8000;
-const STALL_TIMEOUT_MS = 7000;
+const RETRY_DELAY_MS = 800;
+const STALL_TIMEOUT_MS = 3500;
 const TARGET_PLAYOUT_DELAY_SECONDS = 0.04;
 const STATS_INTERVAL_MS = 1000;
-const MAX_JITTER_BUFFER_DELAY_SECONDS = 1.2;
-const MAX_HIGH_DELAY_SAMPLES = 8;
+const MAX_JITTER_BUFFER_DELAY_SECONDS = 0.45;
+const MAX_HIGH_DELAY_SAMPLES = 3;
 
 function buildSrsRtcUrls(src: string) {
   const sourceUrl = new URL(src, window.location.href);
@@ -49,18 +47,11 @@ function tuneReceiverForLowLatency(receiver: RTCRtpReceiver) {
   }
 }
 
-export const HttpFlvPlayer: React.FC<HttpFlvPlayerProps> = ({ label, src, fallbackSrcs = [], className = '', onStream }) => {
+export const HttpFlvPlayer: React.FC<HttpFlvPlayerProps> = ({ label, src, className = '', onStream }) => {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const peerRef = useRef<RTCPeerConnection | null>(null);
   const [hasError, setHasError] = useState(false);
   const [retryCount, setRetryCount] = useState(0);
-  const fallbackKey = fallbackSrcs.join('|');
-  const sourceList = useMemo(() => {
-    const uniqueSources = [src, ...fallbackSrcs].filter(Boolean);
-    return Array.from(new Set(uniqueSources));
-  }, [fallbackKey, src]);
-  const sourceIndex = retryCount % Math.max(sourceList.length, 1);
-  const activeSrc = sourceList[sourceIndex] || src;
 
   useEffect(() => {
     const video = videoRef.current;
@@ -90,8 +81,7 @@ export const HttpFlvPlayer: React.FC<HttpFlvPlayerProps> = ({ label, src, fallba
       if (retryTimer) return;
       setHasError(true);
       cleanupPeer();
-      const retryDelay = Math.min(MAX_RETRY_DELAY_MS, RETRY_DELAY_MS * Math.max(1, retryCount + 1));
-      retryTimer = window.setTimeout(() => setRetryCount((count) => count + 1), retryDelay);
+      retryTimer = window.setTimeout(() => setRetryCount((count) => count + 1), RETRY_DELAY_MS);
     };
 
     const markFrame = () => {
@@ -131,7 +121,7 @@ export const HttpFlvPlayer: React.FC<HttpFlvPlayerProps> = ({ label, src, fallba
 
           if (highDelaySamples >= MAX_HIGH_DELAY_SAMPLES) {
             highDelaySamples = 0;
-            console.warn(`${label} WebRTC jitter buffer is high; keeping stream alive to avoid flapping.`);
+            scheduleRetry();
           }
         });
       } catch {
@@ -148,7 +138,7 @@ export const HttpFlvPlayer: React.FC<HttpFlvPlayerProps> = ({ label, src, fallba
         return;
       }
 
-      const { apiUrl, streamUrl } = buildSrsRtcUrls(activeSrc);
+      const { apiUrl, streamUrl } = buildSrsRtcUrls(src);
       const peer = new RTCPeerConnection({
         bundlePolicy: 'max-bundle',
         rtcpMuxPolicy: 'require',
@@ -225,7 +215,7 @@ export const HttpFlvPlayer: React.FC<HttpFlvPlayerProps> = ({ label, src, fallba
 
     play().catch((error) => {
       if (closed && abortController.signal.aborted) return;
-      console.warn(`${label} WebRTC stream disconnected from ${activeSrc}.`, error);
+      console.warn('WebRTC stream disconnected.', error);
       scheduleRetry();
     });
 
@@ -245,7 +235,7 @@ export const HttpFlvPlayer: React.FC<HttpFlvPlayerProps> = ({ label, src, fallba
       video.removeEventListener('timeupdate', markFrame);
       cleanupPeer();
     };
-  }, [activeSrc, label, onStream, retryCount]);
+  }, [onStream, retryCount, src]);
 
   return (
     <div className={`relative min-h-[180px] overflow-hidden bg-slate-950 ${className}`}>

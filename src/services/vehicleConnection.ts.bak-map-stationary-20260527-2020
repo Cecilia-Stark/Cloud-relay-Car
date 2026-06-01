@@ -10,6 +10,8 @@ const METERS_PER_DEG_LAT = 111320;
 const POLL_INTERVAL_MS = 200;
 const VEHICLE_WHEELBASE_METERS = 1.2;
 const MAX_ROAD_WHEEL_DEGREES = 35;
+const G29_DEMO_MIN_SPEED_MPS = 1.2;
+const G29_DEMO_MAX_SPEED_MPS = 3.0;
 const BATTERY_EMPTY_VOLTAGE = 20.0;
 const BATTERY_FULL_VOLTAGE = 25.6;
 const ORIGIN_LAT = DEFAULT_LAT + POSITION_OFFSET_NORTH_METERS / METERS_PER_DEG_LAT;
@@ -104,7 +106,7 @@ class VehicleConnectionService {
           const rawSpeed = Math.abs(robotTelemetry.velocity?.linear ?? 0);
           speedKmh = Number.isFinite(vehicleSpeed) ? Math.abs(vehicleSpeed) : rawSpeed * 3.6;
 
-          const pose = this.advanceVehiclePose(robotTelemetry);
+          const pose = this.advanceVehiclePose(robotTelemetry, g29);
           lat = ORIGIN_LAT + pose.y / METERS_PER_DEG_LAT;
           lng = ORIGIN_LNG + pose.x / METERS_PER_DEG_LNG_AT_ORIGIN;
         }
@@ -161,7 +163,7 @@ class VehicleConnectionService {
     this.subscribers.forEach(cb => cb(data));
   }
 
-  private advanceVehiclePose(robotTelemetry: RobotTelemetry) {
+  private advanceVehiclePose(robotTelemetry: RobotTelemetry, g29: G29Input | null) {
     const now = Date.now();
     const dt = clamp((now - this.lastDemoUpdateMs) / 1000, 0.02, 0.5);
     this.lastDemoUpdateMs = now;
@@ -174,7 +176,9 @@ class VehicleConnectionService {
     if (!hasVehicleSpeed && !hasOdomSpeed) {
       const directPose = this.resolveDirectRobotPose(robotTelemetry);
       if (directPose) return directPose;
-      return { ...this.demoPose, demoSpeedMps: 0 };
+
+      const demoSpeedMps = this.advanceDemoPoseFromG29(g29, dt);
+      return { ...this.demoPose, demoSpeedMps };
     }
 
     const direction = isReverseGear(robotTelemetry.vehicle?.gear) ? -1 : 1;
@@ -211,6 +215,31 @@ class VehicleConnectionService {
 
     this.demoPose = { x, y, yaw };
     return { ...this.demoPose, demoSpeedMps: 0 };
+  }
+
+  private advanceDemoPoseFromG29(g29: G29Input | null, dt: number) {
+    if (!g29) return 0;
+
+    const steer = clamp(finiteNumber(g29.steer), -450, 450);
+    const throttle = clamp(finiteNumber(g29.throttle), 0, 100);
+    const brake = clamp(finiteNumber(g29.brake), 0, 100);
+    const steerNorm = clamp(Math.abs(steer) >= 45 ? steer / 450 : steer / 10, -1, 1);
+    const steerActivity = Math.abs(steerNorm);
+    const throttleActivity = throttle / 100;
+
+    if (brake > 85 || (steerActivity < 0.005 && throttleActivity < 0.015)) {
+      return 0;
+    }
+
+    const inputActivity = Math.max(throttleActivity, steerActivity * 0.75);
+    const brakeScale = clamp(1 - brake / 120, 0.2, 1);
+    const speed = Math.max(G29_DEMO_MIN_SPEED_MPS, inputActivity * G29_DEMO_MAX_SPEED_MPS * brakeScale);
+    const turnRate = steerNorm * 1.35;
+
+    this.demoPose.yaw += turnRate * dt;
+    this.demoPose.x += Math.cos(this.demoPose.yaw) * speed * dt;
+    this.demoPose.y += Math.sin(this.demoPose.yaw) * speed * dt;
+    return speed;
   }
 
   // ============================================================

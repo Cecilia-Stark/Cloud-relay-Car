@@ -21,9 +21,6 @@ export const MonitorView: React.FC<MonitorViewProps> = ({
   const streamHost = import.meta.env.VITE_STREAM_HOST || window.location.hostname || '8.149.246.34';
   const carCameraUrl = import.meta.env.VITE_CAR_CAMERA_URL || `/live/car.flv`;
   const roadsideCameraUrl = import.meta.env.VITE_ROADSIDE_CAMERA_URL || `/live/car_front.flv`;
-  const carCameraFallbackSrcs = ['/live/car.flv'].filter((candidate) => candidate !== carCameraUrl);
-  const roadsideCameraFallbackSrcs = ['/live/car_front.flv', '/live/xxx.flv']
-    .filter((candidate, index, list) => candidate !== roadsideCameraUrl && list.indexOf(candidate) === index);
 
   const robot = telemetry.robot;
   const battery = robot?.battery;
@@ -38,18 +35,12 @@ export const MonitorView: React.FC<MonitorViewProps> = ({
           <HttpFlvPlayer
             label="Roadside 4G camera"
             src={roadsideCameraUrl}
-            fallbackSrcs={roadsideCameraFallbackSrcs}
             className="flex-1 opacity-80 grayscale-[30%]"
           />
         </div>
 
         <div className="monitor-panel monitor-panel-main col-span-6 overflow-hidden flex flex-col relative">
-          <HttpFlvPlayer
-            label="Vehicle front camera"
-            src={carCameraUrl}
-            fallbackSrcs={carCameraFallbackSrcs}
-            className="flex-1 w-full h-full"
-          />
+          <HttpFlvPlayer label="Vehicle front camera" src={carCameraUrl} className="flex-1 w-full h-full" />
 
           {isCritical && (
             <div className="monitor-warning-overlay absolute inset-0 backdrop-blur-sm z-50 flex flex-col items-center justify-center">
